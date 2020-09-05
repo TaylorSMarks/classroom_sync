@@ -1,5 +1,5 @@
 import logging
-import requests  # <<< This has to be listed as a prereq for this file.
+import requests
 
 from collections        import namedtuple
 from getpass            import getuser
@@ -17,21 +17,27 @@ copyablePattern = Regex(r'#\s*COPYABLE.*?#\s*END\s*COPYABLE', DOTALL | IGNORECAS
 
 # vvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
 # 
+# To Install:
+#   1a - Windows: Need to install git first - can get it from here: https://git-scm.com/download/win
+#   1b - Mac: Prefix the below command with sudo. It will prompt for the password (which won't be shown) after. May have to install Xcode command line tools if prompted.
+#   2  - Everyone: pip3 install git+https://github.com/TaylorSMarks/classroom_sync.git
+#
 # REQUIRED STEPS LEFT:
-#  1 - Figure out how to allow it to shutdown better.                                               <<< Maybe done, need to test
-#  2 - View Remote menu never populates                                                             <<< Works on Windows now - need to copy it over to Mac and test.
-#  3 - CodeMirror view doesn't automatically open - it probably should when something is received.
-#  4 - Does picking something to view explicitly work?                                              <<< Windows requesting from Mac doesn't.
-#  5 - Does prioritizing showing something work?                                                    <<< Works from Mac to Windows - what about the other way?
+#  1 - Need to show a title of what's being shown in the code mirror.                               <<< Maybe done, need to test
+#  2 - Figure out how to allow it to shutdown better.                                               <<< Maybe done, need to test
+#  3 - View Remote menu never populates                                                             <<< Works on Windows now - need to copy it over to Mac and test.
+#  4 - CodeMirror view doesn't automatically open - it probably should when something is received.  <<< Maybe done - need to test.
+#  5 - Does picking something to view explicitly work?                                              <<< Windows requesting from Mac works - what about the other way?
+#  6 - Does prioritizing showing something work?                                                    <<< Works from Mac to Windows - what about the other way?
 # 
 # OPTIONAL STEPS LEFT:
-#  1 - Add in line numbers, EnhancedTextFrame in the file tktextext.py offers this.
-#  2 - Fix inconsistent font issues in CodeMirrorView.
-#  3 - Fix the weird scroll bar in CodeMirrorView.
-#  3 - Fix fact that CodeMirrorView can be edited.
-#  4 - Add an ability to un-request files.
-#  5 - Implement ShellMirrorView.
-#  6 - Add in an assistant mirror view.
+#  1 - Fix fact that CodeMirrorView can be edited.
+#  2 - Add in line numbers, EnhancedTextFrame in the file tktextext.py offers this.
+#  3 - Fix inconsistent font issues in CodeMirrorView.
+#  4 - Fix the weird scroll bar in CodeMirrorView.
+#  5 - Add an ability to un-request files.
+#  6 - Implement ShellMirrorView.
+#  7 - Add in an assistant mirror view.
 #  
 # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -146,7 +152,7 @@ def sync():
     for filename in allFiles:
         if (filename not in sync.lastSentFiles
                 or sync.lastSentFiles[filename].contents != allFiles[filename]
-                or sync.lastSentFiles[filename].time     >= time() + 600):
+                or sync.lastSentFiles[filename].time     <= time() - 600):
             changedFiles[filename] = allFiles[filename]
 
     clipboardEnforcer.copyableText['files'] = ''.join(allFiles.values())
@@ -183,9 +189,14 @@ def sync():
             sync.lastUser    = response['user']
             sync.lastFile    = response['file']
 
-            codeMirrorText = wb.get_view('CodeMirrorView').text
-            codeMirrorText.delete('1.0', 'end-1c')
-            codeMirrorText.insert('1.0', response['body'])
+            wb.show_view('CodeMirrorView', False)
+
+            view     = wb.get_view('CodeMirrorView')
+            notebook = view.home_widget.master  # Instance of ttk.Notebook
+            notebook.tab(view.home_widget, text = 'Code Mirror - ' + requestablePairToName(sync.lastUser, sync.lastFile))
+
+            codeMirrorText = view.text
+            codeMirrorText.set_content(response['body'])
 
             clipboardEnforcer.syncText = response['body']
             clipboardEnforcer.copyableText['allowed'] = ''.join(copyablePattern.findall(response['body']))
