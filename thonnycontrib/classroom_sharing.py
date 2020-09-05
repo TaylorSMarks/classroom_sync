@@ -18,17 +18,20 @@ copyablePattern = Regex(r'#\s*COPYABLE.*?#\s*END\s*COPYABLE', DOTALL | IGNORECAS
 # vvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
 # 
 # REQUIRED STEPS LEFT:
-#  1 - Distribute the client side
-#  2 - Test that it all works. All of it. Like actual syncing between clients stuff.
+#  1 - Figure out how to allow it to shutdown better.                                               <<< Maybe done, need to test
+#  2 - View Remote menu never populates                                                             <<< Works on Windows now - need to copy it over to Mac and test.
+#  3 - CodeMirror view doesn't automatically open - it probably should when something is received.
+#  4 - Does picking something to view explicitly work?                                              <<< Windows requesting from Mac doesn't.
+#  5 - Does prioritizing showing something work?                                                    <<< Works from Mac to Windows - what about the other way?
 # 
 # OPTIONAL STEPS LEFT:
 #  1 - Add in line numbers, EnhancedTextFrame in the file tktextext.py offers this.
 #  2 - Fix inconsistent font issues in CodeMirrorView.
+#  3 - Fix the weird scroll bar in CodeMirrorView.
 #  3 - Fix fact that CodeMirrorView can be edited.
-#  4 - Add an ability to deprioritize files.
-#  5 - Add an ability to un-request files.
-#  6 - Implement ShellMirrorView.
-#  7 - Add in an assistant mirror view.
+#  4 - Add an ability to un-request files.
+#  5 - Implement ShellMirrorView.
+#  6 - Add in an assistant mirror view.
 #  
 # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -91,7 +94,7 @@ def updateMenu(wb):
 
     # Add everything new that's now requestable.
     for newRequestable in currentRequestables:
-        if newRequestable not in sync.requestableFiles:
+        if newRequestable not in updateMenu.oldRequestable:
             updateMenu.viewMenu.add_command(label = requestablePairToName(*newRequestable), command = lambda: updateRequestedFile(*newRequestable))
 
     updateMenu.oldRequestable = currentRequestables
@@ -158,7 +161,6 @@ def sync():
         if val is not None:
             request[var] = val
             if var == 'prioritizeFile':
-                logging.info('Set prioritizeFile to ' + request[var] + ' in the request.')
                 sync.prioritizeFile = None  # Only declare it as a priority once.
 
     try:
@@ -190,7 +192,8 @@ def sync():
     except Exception:
         logging.exception('Failure during sync.', exc_info = True)
     finally:
-        Timer(5, sync).start()
+        if not get_workbench()._closing:
+            Timer(5, sync).start()
 
 sync.requestableFiles = []
 sync.lastSentFiles    = {}
@@ -214,7 +217,8 @@ def clipboardEnforcer():
     except:
         get_workbench().report_exception("Clipboard enforcer got an error.")
     finally:
-        _default_root.after(200, clipboardEnforcer)
+        if not get_workbench()._closing:
+            _default_root.after(200, clipboardEnforcer)
 
 clipboardEnforcer.syncText     = ''
 clipboardEnforcer.copyableText = {}
@@ -238,8 +242,8 @@ def load_plugin():
     logging.info('Loading classroom_sharing.py - will involve a 10 second wait.')
     wb = get_workbench()
     #wb.add_command(command_id="hello", menu_name="tools", command_label="Hello!", handler=sync)
-    wb.add_view(CodeMirrorView,  'Code Mirror',  'ne', visible_by_default = False)
+    wb.add_view(CodeMirrorView,  'Code Mirror',  'ne', visible_by_default = True)
     #wb.add_view(ShellMirrorView,'Shell Mirror', 'se', visible_by_default = False)
-    _default_root.after(10000, afterLoad)  # Give Thonny some time to finish initializing
+    _default_root.after(7000, afterLoad)  # Give Thonny some time (7 seconds) to finish initializing
 
 # get_editor_notebook().get_current_editor().get_long_description() gives me the title of the full file path of whatever tab they have open.
