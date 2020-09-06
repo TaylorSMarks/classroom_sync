@@ -24,11 +24,15 @@ copyablePattern = Regex(r'#\s*COPYABLE.*?#\s*END\s*COPYABLE', DOTALL | IGNORECAS
 #   2  - Everyone: pip3 install git+https://github.com/TaylorSMarks/classroom_sync.git
 #
 # REQUIRED STEPS LEFT:
-#  1 - Does explicitly picking something to view work? <<< Not always. Sometimes it fails for some reason. I think I prioritized a file from Windows, then the Mac couldn't request another?
-#  2 - Files still vanish after they're ten minutes old and just never show up again? No idea what's going on...
-#  3 - Test that CodeMirrorView and ShellMirrorView cannot be edited.   <<< Good on Windows. Need to keep checking on Mac...
-#  4 - Verify that shell syncing works.                 <<< Probably not?
-#  5 - Figure out why shutdown sometimes doesn't work.  <<< Seems to be related to closing with unsaved files?
+#  1 - Selecting stuff to highlight is difficult on the Mac - requires a right click to focus the widget, first. Fix it so left click always works for highlighting on the Mac.
+#  2 - Illegal content is sometimes allowed on the clipboard? I don't know what I did to get around the checker...
+#      I wonder if maybe the checker is sensitive to linebreak types?
+#
+# BUGS SOMETIMES SEEN:
+#  1 - Shutdown sometimes hangs on the Mac, or the window closes but the application keeps running on Windows.  <<< Possibly related to closing with unsaved files?
+#  2 - Shell syncing sometimes just doesn't seem to happen?
+#  3 - Explicitly picking something to view doesn't always work? <<< I think I prioritized a file from Windows, then the Mac couldn't request another?
+#  4 - Files vanish after they're ten minutes old and never show up again?
 #
 # OPTIONAL STEPS LEFT:
 #  1 - Fix inconsistent font issues in CodeMirrorView.  <<< Seems to be related to it not viewing everything as code? Probably doesn't matter since we shouldn't edit it anyways.
@@ -225,7 +229,8 @@ def clipboardEnforcer():
     try:
         clipboardContents = _default_root.clipboard_get()
         if clipboardContents != clipboardEnforcer.previousClipboardContents:
-            if any(clipboardContents in t for t in clipboardEnforcer.syncText.values()) and not any(clipboardContents in t for t in clipboardEnforcer.copyableText.values()):
+            stripped = clipboardContents.strip()
+            if any(stripped in t for t in clipboardEnforcer.syncText.values()) and not any(stripped in t for t in clipboardEnforcer.copyableText.values()):
                 _default_root.clipboard_clear()
                 _default_root.clipboard_append(clipboardEnforcer.previousClipboardContents)
                 showinfo('Forbidden copy detected!', "You weren't allowed to copy that! Your clipboard has been rolled back!")
