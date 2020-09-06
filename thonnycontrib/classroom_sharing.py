@@ -2,13 +2,14 @@ import logging
 import requests
 
 from collections        import namedtuple
+from contextlib         import suppress
 from getpass            import getuser
 from re                 import DOTALL, IGNORECASE, compile as Regex
 from thonny             import get_workbench
 from thonny.codeview    import CodeView
 from thonny.shell       import ShellView
-from time               import time
-from tkinter            import _default_root, Menu
+from time               import time, ctime
+from tkinter            import _default_root, Menu, DISABLED, NORMAL
 from tkinter.messagebox import showinfo
 from traceback          import format_exc
 from threading          import Timer
@@ -23,50 +24,32 @@ copyablePattern = Regex(r'#\s*COPYABLE.*?#\s*END\s*COPYABLE', DOTALL | IGNORECAS
 #   2  - Everyone: pip3 install git+https://github.com/TaylorSMarks/classroom_sync.git
 #
 # REQUIRED STEPS LEFT:
-#  1 - Need to show a title of what's being shown in the code mirror.                               <<< Maybe done, need to test
-#  2 - Figure out how to allow it to shutdown better.                                               <<< Maybe done, need to test
-#  3 - View Remote menu never populates                                                             <<< Works on Windows now - need to copy it over to Mac and test.
-#  4 - CodeMirror view doesn't automatically open - it probably should when something is received.  <<< Maybe done - need to test.
-#  5 - Does picking something to view explicitly work?                                              <<< Windows requesting from Mac works - what about the other way?
-#  6 - Does prioritizing showing something work?                                                    <<< Works from Mac to Windows - what about the other way?
-# 
+#  1 - Does explicitly picking something to view work? <<< Not always. Sometimes it fails for some reason. I think I prioritized a file from Windows, then the Mac couldn't request another?
+#  2 - Files still vanish after they're ten minutes old and just never show up again? No idea what's going on...
+#  3 - Test that CodeMirrorView and ShellMirrorView cannot be edited.
+#  4 - Verify that shell syncing works.
+#  5 - Figure out why shutdown sometimes doesn't work.
+#
 # OPTIONAL STEPS LEFT:
-#  1 - Fix fact that CodeMirrorView can be edited.
-#  2 - Add in line numbers, EnhancedTextFrame in the file tktextext.py offers this.
-#  3 - Fix inconsistent font issues in CodeMirrorView.
-#  4 - Fix the weird scroll bar in CodeMirrorView.
-#  5 - Add an ability to un-request files.
-#  6 - Implement ShellMirrorView.
-#  7 - Add in an assistant mirror view.
+#  1 - Fix inconsistent font issues in CodeMirrorView.  <<< Seems to be related to it not viewing everything as code? Probably doesn't matter since we shouldn't edit it anyways.
+#  2 - Fix the weird scroll bar in CodeMirrorView.
+#  3 - Add an ability to un-request files.
+#  4 - Add in an assistant mirror view.
 #  
 # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-class ShellMirrorView(ShellView):
-    pass
-
-    # ShellView has an _insert_text_directly method and also direct_insert...
-    # It also has _editing_allowed...
-    # 
-
-    '''
-    try:
-        shellMirrorText = wb.get_view('ShellMirrorView').text
-        showinfo('Got the text', 'Yes I did') 
-        shellMirrorText.delete('1.0', 'end-1c')  # <<< This part causes errors.
-        showinfo('Deleted', 'Yes I did') 
-        shellMirrorText.insert('1.0', wb.get_view('ShellView').text.get('1.0', 'end-1c'))
-        showinfo('Did the insert', 'And yet you do not appreciate')
-    except BaseException as e:
-        showinfo('Stack', format_exc()) 
-    '''
-
+class ShellMirrorView(CodeView):
+    def __init__(self, *args, **kwargs):
+        # Syntax highlighting here should be different from a normal CodeView... maybe? Or maybe it really doesn't matter, as long as it's disabled?
+        kwargs['state'] = DISABLED
+        super().__init__(*args, **kwargs)
 
 class CodeMirrorView(CodeView):
-    pass
-
-    # When I tried setting an __init__ method it somehow didn't work... there was some Tk variable that it wanted but wasn't set.
-    #def __init__(self, *args, **kwargs):
-    #    super().__init__(self, *args, **kwargs)
+    def __init__(self, *args, **kwargs):
+        kwargs['line_numbers'] = True
+        kwargs['font'] = 'EditorFont'
+        kwargs['state'] = DISABLED
+        super().__init__(*args, **kwargs)
 
 SentFile = namedtuple('SentFile', ['contents', 'time'])
 
@@ -147,22 +130,31 @@ def sync():
     allFiles     = getAllFiles(wb)
     changedFiles = {}
 
-    # Send everything that's never been sent before, or which has changed contents,
-    # or which simply hasn't been sent in the past 10 minutes.
-    for filename in allFiles:
-        if (filename not in sync.lastSentFiles
-                or sync.lastSentFiles[filename].contents != allFiles[filename]
-                or sync.lastSentFiles[filename].time     <= time() - 600):
-            changedFiles[filename] = allFiles[filename]
+    def addIfChanged(name, contents, building):
+        ''' Adds to building if the contents have changed since last sent,
+            or if they haven't been sent in the past 10 minutes. '''
+        if (name not in sync.lastSentFiles
+                or sync.lastSentFiles[name].contents != contents
+                or sync.lastSentFiles[name].time     <= time() - 600):
+            building[name] = contents
 
-    clipboardEnforcer.copyableText['files'] = ''.join(allFiles.values())
+    for filename in allFiles:
+        addIfChanged(filename, allFiles[filename], changedFiles)
+
+    shellContents = ''
+    with suppress(Exception):
+        shellContents = wb.get_view('ShellView').text.get('1.0', 'end-1c')
+
+    addIfChanged(':shell:', shellContents, changedFiles)
+
+    clipboardEnforcer.copyableText['files'] = ''.join(allFiles.values()) + shellContents
 
     request = {'user': getuser()}
 
     if changedFiles:
         request['files'] = changedFiles
 
-    for var in 'lastVersion', 'lastUser', 'lastFile', 'prioritizeFile', 'requestUser', 'requestFile':
+    for var in 'lastVersion', 'lastUser', 'lastFile', 'prioritizeFile', 'requestUser', 'requestFile', 'lastShell':
         val = getattr(sync, var)
         if val is not None:
             request[var] = val
@@ -184,33 +176,46 @@ def sync():
         sync.requestableFiles = response['files']
         updateMenu(wb)
 
+        def syncHelper(viewName, tabName, contents, syncKey):
+            wb.show_view(viewName, False)  # Don't take the focus.
+
+            view     = wb.get_view(viewName)
+            notebook = view.home_widget.master  # Instance of ttk.Notebook
+            notebook.tab(view.home_widget, text = tabName)
+
+            viewText = view.text
+            viewText['state'] = NORMAL
+            viewText.set_content(contents)
+            viewText['state'] = DISABLED
+
+            clipboardEnforcer.syncText[syncKey] = contents
+
         if 'version' in response:
             sync.lastVersion = response['version']
             sync.lastUser    = response['user']
             sync.lastFile    = response['file']
-
-            wb.show_view('CodeMirrorView', False)
-
-            view     = wb.get_view('CodeMirrorView')
-            notebook = view.home_widget.master  # Instance of ttk.Notebook
-            notebook.tab(view.home_widget, text = 'Code Mirror - ' + requestablePairToName(sync.lastUser, sync.lastFile))
-
-            codeMirrorText = view.text
-            codeMirrorText.set_content(response['body'])
-
-            clipboardEnforcer.syncText = response['body']
+            syncHelper('CodeMirrorView', 'Code Mirror - ' + requestablePairToName(sync.lastUser, sync.lastFile), response['body'], 'main')
             clipboardEnforcer.copyableText['allowed'] = ''.join(copyablePattern.findall(response['body']))
+
+        if 'shellVersion' in response:
+            sync.lastShell = response['shellVersion']
+            sync.lastUser  = response['user']
+            syncHelper('ShellMirrorView', sync.lastUser + "'s Shell", response['shellBody'], 'shell')
     except Exception:
         logging.exception('Failure during sync.', exc_info = True)
     finally:
         if not get_workbench()._closing:
+            logging.info('Will kick off another sync in 5 seconds since there is no mention of the app closing as of: ' + ctime())
             Timer(5, sync).start()
+        else:
+            logging.info('No more syncing - time for the app to die: ' + ctime())
 
 sync.requestableFiles = []
 sync.lastSentFiles    = {}
 sync.lastVersion      = None
 sync.lastUser         = None
 sync.lastFile         = None
+sync.lastShell        = None
 sync.prioritizeFile   = None
 sync.requestUser      = None
 sync.requestFile      = None
@@ -219,7 +224,7 @@ def clipboardEnforcer():
     try:
         clipboardContents = _default_root.clipboard_get()
         if clipboardContents != clipboardEnforcer.previousClipboardContents:
-            if clipboardContents in clipboardEnforcer.syncText and not any(clipboardContents in t for t in clipboardEnforcer.copyableText.values()):
+            if any(clipboardContents in t for t in clipboardEnforcer.syncText.values()) and not any(clipboardContents in t for t in clipboardEnforcer.copyableText.values()):
                 _default_root.clipboard_clear()
                 _default_root.clipboard_append(clipboardEnforcer.previousClipboardContents)
                 showinfo('Forbidden copy detected!', "You weren't allowed to copy that! Your clipboard has been rolled back!")
@@ -229,8 +234,15 @@ def clipboardEnforcer():
         get_workbench().report_exception("Clipboard enforcer got an error.")
     finally:
         if not get_workbench()._closing:
+            clipboardEnforcer.counter += 1
+            if clipboardEnforcer.counter > 30:
+                clipboardEnforcer.counter = 0
+                logging.info('Clipboard enforcer is still running since there is no mention of the app closing as of: ' + ctime())
             _default_root.after(200, clipboardEnforcer)
+        else:
+            logging.info('No more clipboard enforcing - time for the app to die: ' + ctime())
 
+clipboardEnforcer.counter      = 0
 clipboardEnforcer.syncText     = ''
 clipboardEnforcer.copyableText = {}
 
@@ -250,11 +262,8 @@ def afterLoad():
     
 
 def load_plugin():
-    logging.info('Loading classroom_sharing.py - will involve a 10 second wait.')
+    logging.info('Loading classroom_sharing.py - will involve a 7 second wait.')
     wb = get_workbench()
-    #wb.add_command(command_id="hello", menu_name="tools", command_label="Hello!", handler=sync)
     wb.add_view(CodeMirrorView,  'Code Mirror',  'ne', visible_by_default = True)
-    #wb.add_view(ShellMirrorView,'Shell Mirror', 'se', visible_by_default = False)
+    wb.add_view(ShellMirrorView, 'Shell Mirror', 'se', visible_by_default = True)
     _default_root.after(7000, afterLoad)  # Give Thonny some time (7 seconds) to finish initializing
-
-# get_editor_notebook().get_current_editor().get_long_description() gives me the title of the full file path of whatever tab they have open.
