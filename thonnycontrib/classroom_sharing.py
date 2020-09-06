@@ -24,9 +24,7 @@ copyablePattern = Regex(r'#\s*COPYABLE.*?#\s*END\s*COPYABLE', DOTALL | IGNORECAS
 #   2  - Everyone: pip3 install git+https://github.com/TaylorSMarks/classroom_sync.git
 #
 # REQUIRED STEPS LEFT:
-#  1 - Selecting stuff to highlight is difficult on the Mac - requires a right click to focus the widget, first. Fix it so left click always works for highlighting on the Mac.
-#  2 - Illegal content is sometimes allowed on the clipboard? I don't know what I did to get around the checker...
-#      I wonder if maybe the checker is sensitive to linebreak types?
+#  1 - Selecting stuff to highlight is difficult on the Mac - requires a right click to focus the widget, first. Fix it so left click always works for highlighting on the Mac.  <<< Maybe fixed? Need to test.
 #
 # BUGS SOMETIMES SEEN:
 #  1 - Shutdown sometimes hangs on the Mac, or the window closes but the application keeps running on Windows.  <<< Possibly related to closing with unsaved files?
@@ -47,6 +45,7 @@ class ShellMirrorView(CodeView):
         # Syntax highlighting here should be different from a normal CodeView... maybe? Or maybe it really doesn't matter, as long as it's disabled?
         kwargs['state'] = DISABLED
         super().__init__(*args, **kwargs)
+        self.text.bind('<1>', lambda event: self.text.focus_set())
 
 class CodeMirrorView(CodeView):
     def __init__(self, *args, **kwargs):
@@ -54,6 +53,7 @@ class CodeMirrorView(CodeView):
         kwargs['font'] = 'EditorFont'
         kwargs['state'] = DISABLED
         super().__init__(*args, **kwargs)
+        self.text.bind('<1>', lambda event: self.text.focus_set())
 
 SentFile = namedtuple('SentFile', ['contents', 'time'])
 
