@@ -26,9 +26,9 @@ copyablePattern = Regex(r'#\s*COPYABLE.*?#\s*END\s*COPYABLE', DOTALL | IGNORECAS
 # REQUIRED STEPS LEFT:
 #  1 - Does explicitly picking something to view work? <<< Not always. Sometimes it fails for some reason. I think I prioritized a file from Windows, then the Mac couldn't request another?
 #  2 - Files still vanish after they're ten minutes old and just never show up again? No idea what's going on...
-#  3 - Test that CodeMirrorView and ShellMirrorView cannot be edited.
-#  4 - Verify that shell syncing works.
-#  5 - Figure out why shutdown sometimes doesn't work.
+#  3 - Test that CodeMirrorView and ShellMirrorView cannot be edited.   <<< Good on Windows. Need to keep checking on Mac...
+#  4 - Verify that shell syncing works.                 <<< Probably not?
+#  5 - Figure out why shutdown sometimes doesn't work.  <<< Seems to be related to closing with unsaved files?
 #
 # OPTIONAL STEPS LEFT:
 #  1 - Fix inconsistent font issues in CodeMirrorView.  <<< Seems to be related to it not viewing everything as code? Probably doesn't matter since we shouldn't edit it anyways.
@@ -200,6 +200,7 @@ def sync():
         if 'shellVersion' in response:
             sync.lastShell = response['shellVersion']
             sync.lastUser  = response['user']
+            logging.info('Received shell version ' + str(sync.lastShell) + ' from ' + sync.lastUser)
             syncHelper('ShellMirrorView', sync.lastUser + "'s Shell", response['shellBody'], 'shell')
     except Exception:
         logging.exception('Failure during sync.', exc_info = True)
@@ -243,7 +244,7 @@ def clipboardEnforcer():
             logging.info('No more clipboard enforcing - time for the app to die: ' + ctime())
 
 clipboardEnforcer.counter      = 0
-clipboardEnforcer.syncText     = ''
+clipboardEnforcer.syncText     = {}
 clipboardEnforcer.copyableText = {}
 
 def afterLoad():
