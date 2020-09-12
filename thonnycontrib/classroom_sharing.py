@@ -9,7 +9,7 @@ from thonny             import get_workbench
 from thonny.codeview    import CodeView
 from thonny.shell       import ShellView
 from time               import time, ctime
-from tkinter            import _default_root, Menu, DISABLED, NORMAL
+from tkinter            import _default_root, Menu, DISABLED, END, NORMAL
 from tkinter.messagebox import showinfo
 from traceback          import format_exc
 from threading          import Timer
@@ -23,14 +23,14 @@ copyablePattern = Regex(r'#\s*COPYABLE.*?#\s*END\s*COPYABLE', DOTALL | IGNORECAS
 #   1b - Mac: Prefix the below command with sudo. It will prompt for the password (which won't be shown) after. May have to install Xcode command line tools if prompted.
 #   2  - Everyone: pip3 install git+https://github.com/TaylorSMarks/classroom_sync.git
 #
-# REQUIRED STEPS LEFT:
-#  1 - Selecting stuff to highlight is difficult on the Mac - requires a right click to focus the widget, first. Fix it so left click always works for highlighting on the Mac.  <<< Maybe fixed? Need to test.
+# Important thing to address (both are done and just need to be tested now):
+#  1 - Scroll issue
+#  2 - Retract shared files that are no longer open.
 #
 # BUGS SOMETIMES SEEN:
 #  1 - Shutdown sometimes hangs on the Mac, or the window closes but the application keeps running on Windows.  <<< Possibly related to closing with unsaved files?
-#  2 - Shell syncing sometimes just doesn't seem to happen?
-#  3 - Explicitly picking something to view doesn't always work? <<< I think I prioritized a file from Windows, then the Mac couldn't request another?
-#  4 - Files vanish after they're ten minutes old and never show up again?
+#  2 - Explicitly picking something to view doesn't always work? <<< I think I prioritized a file from Windows, then the Mac couldn't request another?
+#  3 - Files vanish after they're ten minutes old and never show up again?
 #
 # OPTIONAL STEPS LEFT:
 #  1 - Fix inconsistent font issues in CodeMirrorView.  <<< Seems to be related to it not viewing everything as code? Probably doesn't matter since we shouldn't edit it anyways.
@@ -158,6 +158,11 @@ def sync():
     if changedFiles:
         request['files'] = changedFiles
 
+    retractFiles = [f for f in sync.lastSentFiles if f != ':shell:' and f not in allFiles]
+
+    if retractFiles:
+        request['retract'] = retractFiles
+
     for var in 'lastVersion', 'lastUser', 'lastFile', 'prioritizeFile', 'requestUser', 'requestFile', 'lastShell':
         val = getattr(sync, var)
         if val is not None:
@@ -177,10 +182,13 @@ def sync():
         for f in changedFiles:
             sync.lastSentFiles[f] = SentFile(changedFiles[f], time())
 
+        for f in retractFiles:
+            sync.lastSentFiles.pop(f, None)  # Delete if it's there, ignore if it's not.
+
         sync.requestableFiles = response['files']
         updateMenu(wb)
 
-        def syncHelper(viewName, tabName, contents, syncKey):
+        def syncHelper(viewName, tabName, contents, syncKey, scrollToEnd = False):
             wb.show_view(viewName, False)  # Don't take the focus.
 
             view     = wb.get_view(viewName)
@@ -188,9 +196,15 @@ def sync():
             notebook.tab(view.home_widget, text = tabName)
 
             viewText = view.text
+            y = viewText.yview()
             viewText['state'] = NORMAL
             viewText.set_content(contents)
             viewText['state'] = DISABLED
+
+            if scrollToEnd:
+                viewText.see(END)
+            else:
+                viewText.yview(y)
 
             clipboardEnforcer.syncText[syncKey] = contents
 
@@ -204,8 +218,7 @@ def sync():
         if 'shellVersion' in response:
             sync.lastShell = response['shellVersion']
             sync.lastUser  = response['user']
-            logging.info('Received shell version ' + str(sync.lastShell) + ' from ' + sync.lastUser)
-            syncHelper('ShellMirrorView', sync.lastUser + "'s Shell", response['shellBody'], 'shell')
+            syncHelper('ShellMirrorView', sync.lastUser + "'s Shell", response['shellBody'], 'shell', scrollToEnd = True)
     except Exception:
         logging.exception('Failure during sync.', exc_info = True)
     finally:
