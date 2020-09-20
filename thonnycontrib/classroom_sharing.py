@@ -4,32 +4,43 @@ import requests
 from collections        import namedtuple
 from contextlib         import suppress
 from getpass            import getuser
-from re                 import DOTALL, IGNORECASE, compile as Regex
+from re                 import DOTALL, IGNORECASE, MULTILINE, compile as Regex
 from thonny             import get_workbench
 from thonny.codeview    import CodeView
 from thonny.shell       import ShellView
 from time               import time, ctime
-from tkinter            import _default_root, Menu, DISABLED, END, NORMAL
+from tkinter            import _default_root, Label, Menu, PhotoImage, BOTH, DISABLED, END, NORMAL, RIGHT
 from tkinter.messagebox import showinfo
+from tkinter.ttk        import Frame
 from traceback          import format_exc
 from threading          import Timer
 
 copyablePattern = Regex(r'#\s*COPYABLE.*?#\s*END\s*COPYABLE', DOTALL | IGNORECASE)
+blurCharPattern = Regex(r'\w')
+blurLinePattern = Regex(r'^(.+)#\s*BLUR(\s*)$', IGNORECASE | MULTILINE)
 
 # vvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
 # 
+# Logs go to Thonny/frontend.log in ~/Library (mac) or ~\AppData\Roaming (win)
+# This file gets installed in ~\AppData\Roaming\Python\Python37\site-packages\thonnycontrib (win)
+# or in /Applications/Thonny.app/Contents/Frameworks/Python.framework/Versions/3.7/lib/python3.7/site-packages
+#
 # To Install:
 #   1a - Windows: Need to install git first - can get it from here: https://git-scm.com/download/win
 #   1b - Mac: Prefix the below command with sudo. It will prompt for the password (which won't be shown) after. May have to install Xcode command line tools if prompted.
 #   2  - Everyone: pip3 install git+https://github.com/TaylorSMarks/classroom_sync.git
 #
-# Important thing to address (both are done and just need to be tested now):
-#  1 - Scroll issue
-#  2 - Retract shared files that are no longer open.
+# TODO:
+#  1 - Pull as much out of this file as possible and make it covered by unit tests.
+#      Really, anything which doesn't depend completely on the UI.
 #
 # BUGS SOMETIMES SEEN:
-#  1 - Shutdown sometimes hangs on the Mac, or the window closes but the application keeps running on Windows.  <<< Possibly related to closing with unsaved files?
+#  1 - Shutdown sometimes hangs on the Mac, or the window closes but the application keeps running on Windows.
+#       - Might have something to do with unsaved files?
+#       - Might have been because I lacked a destroy method for the mirror views?
 #  2 - Explicitly picking something to view doesn't always work? <<< I think I prioritized a file from Windows, then the Mac couldn't request another?
+#      ^^^ This occurred for both Nicole and Matt during Lesson 4. I must figure this out immediately.
+#          There's also periodically a popup about clipboard enforcer failing?
 #  3 - Files vanish after they're ten minutes old and never show up again?
 #
 # OPTIONAL STEPS LEFT:
@@ -40,20 +51,33 @@ copyablePattern = Regex(r'#\s*COPYABLE.*?#\s*END\s*COPYABLE', DOTALL | IGNORECAS
 #  
 # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-class ShellMirrorView(CodeView):
+class ShellMirrorView(CodeView):  # CodeView(tktextext.EnhancedTextFrame(tktextext.TextFrame(ttk.Frame)))
     def __init__(self, *args, **kwargs):
         # Syntax highlighting here should be different from a normal CodeView... maybe? Or maybe it really doesn't matter, as long as it's disabled?
         kwargs['state'] = DISABLED
         super().__init__(*args, **kwargs)
         self.text.bind('<1>', lambda event: self.text.focus_set())
 
-class CodeMirrorView(CodeView):
+    def destroy(self):
+        self.text.unbind('<1>')
+        super().destroy()
+
+class CodeMirrorView(ShellMirrorView):
     def __init__(self, *args, **kwargs):
         kwargs['line_numbers'] = True
         kwargs['font'] = 'EditorFont'
-        kwargs['state'] = DISABLED
         super().__init__(*args, **kwargs)
-        self.text.bind('<1>', lambda event: self.text.focus_set())
+
+class ImageView(Frame):
+    # What I have written here worked - I just decided uploading/downloading
+    # images would be pretty complicated and that I could get most of the same
+    # benefits from the blur function for much lesser complexity.
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # TODO: Make it possible to change the image.
+        self.image = PhotoImage(file = r'C:\Users\Taylor\Downloads\fuckyou.gif')
+        self.label = Label(self, bg = 'pink', image = self.image)
+        self.label.pack(side = RIGHT, fill = BOTH, expand = True)
 
 SentFile = namedtuple('SentFile', ['contents', 'time'])
 
@@ -129,6 +153,11 @@ def getAllFiles(wb):
 
     return allFiles
 
+def blur(unblurredContents):
+    def blurLine(unblurredLine):
+        return blurCharPattern.sub('_', unblurredLine.group(1)) + unblurredLine.group(2)
+    return blurLinePattern.sub(blurLine, unblurredContents)
+
 def sync():
     wb           = get_workbench()
     allFiles     = getAllFiles(wb)
@@ -167,8 +196,6 @@ def sync():
         val = getattr(sync, var)
         if val is not None:
             request[var] = val
-            if var == 'prioritizeFile':
-                sync.prioritizeFile = None  # Only declare it as a priority once.
 
     try:
         r = requests.post('https://marksfam.com/class_sync/class_sync', json = request)
@@ -185,6 +212,8 @@ def sync():
         for f in retractFiles:
             sync.lastSentFiles.pop(f, None)  # Delete if it's there, ignore if it's not.
 
+        sync.prioritizeFiles = None  # Ensure it's only ever declared as a priority once.
+
         sync.requestableFiles = response['files']
         updateMenu(wb)
 
@@ -196,15 +225,21 @@ def sync():
             notebook.tab(view.home_widget, text = tabName)
 
             viewText = view.text
-            y = viewText.yview()
+
+            xlo = ylo = '0.0'
+            xhi = yhi = '1.0'
+            with suppress(Exception): xlo, xhi = view._hbar.get()
+            with suppress(Exception): ylo, yhi = view._vbar.get()
+            logging.debug("The scroll position was retrieved as: {}-{}, {}-{}".format(xlo, xhi, ylo, yhi))
             viewText['state'] = NORMAL
-            viewText.set_content(contents)
+            viewText.set_content(blur(contents))
             viewText['state'] = DISABLED
 
+            with suppress(Exception): view._hbar.set(xlo, xhi)
             if scrollToEnd:
                 viewText.see(END)
             else:
-                viewText.yview(y)
+                with suppress(Exception): view._vertical_scrollbar_update(ylo, yhi)
 
             clipboardEnforcer.syncText[syncKey] = contents
 
@@ -223,7 +258,7 @@ def sync():
         logging.exception('Failure during sync.', exc_info = True)
     finally:
         if not get_workbench()._closing:
-            logging.info('Will kick off another sync in 5 seconds since there is no mention of the app closing as of: ' + ctime())
+            logging.debug('Will kick off another sync in 5 seconds since there is no mention of the app closing as of: ' + ctime())
             Timer(5, sync).start()
         else:
             logging.info('No more syncing - time for the app to die: ' + ctime())
@@ -249,14 +284,14 @@ def clipboardEnforcer():
                 showinfo('Forbidden copy detected!', "You weren't allowed to copy that! Your clipboard has been rolled back!")
             else:
                 clipboardEnforcer.previousClipboardContents = clipboardContents
-    except:
-        get_workbench().report_exception("Clipboard enforcer got an error.")
+    except Exception:
+        logging.exception('Clipboard enforcer got an error.', exc_info = True)
     finally:
         if not get_workbench()._closing:
             clipboardEnforcer.counter += 1
             if clipboardEnforcer.counter > 30:
                 clipboardEnforcer.counter = 0
-                logging.info('Clipboard enforcer is still running since there is no mention of the app closing as of: ' + ctime())
+                logging.debug('Clipboard enforcer is still running since there is no mention of the app closing as of: ' + ctime())
             _default_root.after(200, clipboardEnforcer)
         else:
             logging.info('No more clipboard enforcing - time for the app to die: ' + ctime())
@@ -285,4 +320,5 @@ def load_plugin():
     wb = get_workbench()
     wb.add_view(CodeMirrorView,  'Code Mirror',  'ne', visible_by_default = True)
     wb.add_view(ShellMirrorView, 'Shell Mirror', 'se', visible_by_default = True)
+    #wb.add_view(ImageView,       'Image View',   'se', visible_by_default = True)
     _default_root.after(7000, afterLoad)  # Give Thonny some time (7 seconds) to finish initializing
