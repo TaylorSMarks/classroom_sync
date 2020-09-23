@@ -5,15 +5,37 @@ from collections        import namedtuple
 from contextlib         import suppress
 from getpass            import getuser
 from re                 import DOTALL, IGNORECASE, MULTILINE, compile as Regex
-from thonny             import get_workbench
-from thonny.codeview    import CodeView
-from thonny.shell       import ShellView
 from time               import time, ctime
 from tkinter            import _default_root, Label, Menu, PhotoImage, BOTH, DISABLED, END, NORMAL, RIGHT
 from tkinter.messagebox import showinfo
 from tkinter.ttk        import Frame
-from traceback          import format_exc
 from threading          import Timer
+
+try:
+    from thonny          import get_workbench
+    from thonny.codeview import CodeView
+    from thonny.shell    import ShellView
+
+    class ShellMirrorView(CodeView):  # CodeView(tktextext.EnhancedTextFrame(tktextext.TextFrame(ttk.Frame)))
+        def __init__(self, *args, **kwargs):
+            # Syntax highlighting here should be different from a normal CodeView... maybe? Or maybe it really doesn't matter, as long as it's disabled?
+            kwargs['state'] = DISABLED
+            super().__init__(*args, **kwargs)
+            self.text.bind('<1>', lambda event: self.text.focus_set())
+    
+        def destroy(self):
+            self.text.unbind('<1>')
+            super().destroy()
+    
+    class CodeMirrorView(ShellMirrorView):
+        def __init__(self, *args, **kwargs):
+            kwargs['line_numbers'] = True
+            kwargs['font'] = 'EditorFont'
+            super().__init__(*args, **kwargs)
+
+except ImportError:
+    # We're probably running unit tests outside of Thonny, so it's fine.
+    pass
 
 copyablePattern = Regex(r'#\s*COPYABLE.*?#\s*END\s*COPYABLE', DOTALL | IGNORECASE)
 blurCharPattern = Regex(r'\w')
@@ -29,10 +51,6 @@ blurLinePattern = Regex(r'^(.+)#\s*BLUR(\s*)$', IGNORECASE | MULTILINE)
 #   1a - Windows: Need to install git first - can get it from here: https://git-scm.com/download/win
 #   1b - Mac: Prefix the below command with sudo. It will prompt for the password (which won't be shown) after. May have to install Xcode command line tools if prompted.
 #   2  - Everyone: pip3 install git+https://github.com/TaylorSMarks/classroom_sync.git
-#
-# TODO:
-#  1 - Pull as much out of this file as possible and make it covered by unit tests.
-#      Really, anything which doesn't depend completely on the UI.
 #
 # BUGS SOMETIMES SEEN:
 #  1 - Shutdown sometimes hangs on the Mac, or the window closes but the application keeps running on Windows.
@@ -50,23 +68,6 @@ blurLinePattern = Regex(r'^(.+)#\s*BLUR(\s*)$', IGNORECASE | MULTILINE)
 #  4 - Add in an assistant mirror view.
 #  
 # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-class ShellMirrorView(CodeView):  # CodeView(tktextext.EnhancedTextFrame(tktextext.TextFrame(ttk.Frame)))
-    def __init__(self, *args, **kwargs):
-        # Syntax highlighting here should be different from a normal CodeView... maybe? Or maybe it really doesn't matter, as long as it's disabled?
-        kwargs['state'] = DISABLED
-        super().__init__(*args, **kwargs)
-        self.text.bind('<1>', lambda event: self.text.focus_set())
-
-    def destroy(self):
-        self.text.unbind('<1>')
-        super().destroy()
-
-class CodeMirrorView(ShellMirrorView):
-    def __init__(self, *args, **kwargs):
-        kwargs['line_numbers'] = True
-        kwargs['font'] = 'EditorFont'
-        super().__init__(*args, **kwargs)
 
 class ImageView(Frame):
     # What I have written here worked - I just decided uploading/downloading
@@ -158,18 +159,44 @@ def blur(unblurredContents):
         return blurCharPattern.sub('_', unblurredLine.group(1)) + unblurredLine.group(2)
     return blurLinePattern.sub(blurLine, unblurredContents)
 
+def syncHelper(wb, viewName, tabName, contents, syncKey, scrollToEnd = False):
+    wb.show_view(viewName, False)  # Don't take the focus.
+
+    view     = wb.get_view(viewName)
+    notebook = view.home_widget.master  # Instance of ttk.Notebook
+    notebook.tab(view.home_widget, text = tabName)
+
+    viewText = view.text
+
+    xlo = ylo = '0.0'
+    xhi = yhi = '1.0'
+    with suppress(Exception): xlo, xhi = view._hbar.get()
+    with suppress(Exception): ylo, yhi = view._vbar.get()
+    logging.debug("The scroll position was retrieved as: {}-{}, {}-{}".format(xlo, xhi, ylo, yhi))
+    viewText['state'] = NORMAL
+    viewText.set_content(blur(contents))
+    viewText['state'] = DISABLED
+
+    with suppress(Exception): view._hbar.set(xlo, xhi)
+    if scrollToEnd:
+        viewText.see(END)
+    else:
+        with suppress(Exception): view._vertical_scrollbar_update(ylo, yhi)
+
+    clipboardEnforcer.syncText[syncKey] = contents
+
+def addIfChanged(name, contents, building):
+    ''' Adds to building if the contents have changed since last sent,
+        or if they haven't been sent in the past 10 minutes. '''
+    if (name not in sync.lastSentFiles
+            or sync.lastSentFiles[name].contents != contents
+            or sync.lastSentFiles[name].time     <= time() - 600):
+        building[name] = contents
+
 def sync():
     wb           = get_workbench()
     allFiles     = getAllFiles(wb)
     changedFiles = {}
-
-    def addIfChanged(name, contents, building):
-        ''' Adds to building if the contents have changed since last sent,
-            or if they haven't been sent in the past 10 minutes. '''
-        if (name not in sync.lastSentFiles
-                or sync.lastSentFiles[name].contents != contents
-                or sync.lastSentFiles[name].time     <= time() - 600):
-            building[name] = contents
 
     for filename in allFiles:
         addIfChanged(filename, allFiles[filename], changedFiles)
@@ -217,43 +244,17 @@ def sync():
         sync.requestableFiles = response['files']
         updateMenu(wb)
 
-        def syncHelper(viewName, tabName, contents, syncKey, scrollToEnd = False):
-            wb.show_view(viewName, False)  # Don't take the focus.
-
-            view     = wb.get_view(viewName)
-            notebook = view.home_widget.master  # Instance of ttk.Notebook
-            notebook.tab(view.home_widget, text = tabName)
-
-            viewText = view.text
-
-            xlo = ylo = '0.0'
-            xhi = yhi = '1.0'
-            with suppress(Exception): xlo, xhi = view._hbar.get()
-            with suppress(Exception): ylo, yhi = view._vbar.get()
-            logging.debug("The scroll position was retrieved as: {}-{}, {}-{}".format(xlo, xhi, ylo, yhi))
-            viewText['state'] = NORMAL
-            viewText.set_content(blur(contents))
-            viewText['state'] = DISABLED
-
-            with suppress(Exception): view._hbar.set(xlo, xhi)
-            if scrollToEnd:
-                viewText.see(END)
-            else:
-                with suppress(Exception): view._vertical_scrollbar_update(ylo, yhi)
-
-            clipboardEnforcer.syncText[syncKey] = contents
-
         if 'version' in response:
             sync.lastVersion = response['version']
             sync.lastUser    = response['user']
             sync.lastFile    = response['file']
-            syncHelper('CodeMirrorView', 'Code Mirror - ' + requestablePairToName(sync.lastUser, sync.lastFile), response['body'], 'main')
+            syncHelper(wb, 'CodeMirrorView', 'Code Mirror - ' + requestablePairToName(sync.lastUser, sync.lastFile), response['body'], 'main')
             clipboardEnforcer.copyableText['allowed'] = ''.join(copyablePattern.findall(response['body']))
 
         if 'shellVersion' in response:
             sync.lastShell = response['shellVersion']
             sync.lastUser  = response['user']
-            syncHelper('ShellMirrorView', sync.lastUser + "'s Shell", response['shellBody'], 'shell', scrollToEnd = True)
+            syncHelper(wb, 'ShellMirrorView', sync.lastUser + "'s Shell", response['shellBody'], 'shell', scrollToEnd = True)
     except Exception:
         logging.exception('Failure during sync.', exc_info = True)
     finally:
